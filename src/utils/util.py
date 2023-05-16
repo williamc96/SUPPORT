@@ -23,6 +23,7 @@ def parse_arguments():
     parser.add_argument("--batch_size", type=int, default=16, help="size of the batches")
 
     # model
+    parser.add_argument("--model", type=str, default="./src/GUI/trained_models/bs1.pth", help= "The path to the model to use")
     parser.add_argument("--depth", type=int, default=5, help="the number of blind spot convolutions, must be an odd number")
     parser.add_argument("--blind_conv_channels", type=int, default=64, help="the number of channels of blind spot convolutions")
     parser.add_argument("--one_by_one_channels", type=int, default=[32, 16], nargs="+", help="the number of channels of 1x1 convolutions")

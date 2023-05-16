@@ -1,4 +1,6 @@
 import os
+
+os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 import random
 import logging
 import time
@@ -93,6 +95,8 @@ if __name__=="__main__":
     # Initialize: Create sample and checkpoint directories
     # ----------
     opt = parse_arguments()
+    print(opt)
+    
     cuda = torch.cuda.is_available() and (not opt.use_CPU)
     Tensor = torch.cuda.FloatTensor if cuda else torch.Tensor
     rng = np.random.default_rng(opt.random_seed)

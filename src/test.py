@@ -1,3 +1,5 @@
+import os
+os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 import numpy as np
 import torch
 import skimage.io as skio
@@ -5,7 +7,7 @@ import skimage.io as skio
 from tqdm import tqdm
 from src.utils.dataset import DatasetSUPPORT_test_stitch
 from model.SUPPORT import SUPPORT
-
+from src.utils.util import parse_arguments
 
 def validate(test_dataloader, model):
     """
@@ -54,18 +56,24 @@ def validate(test_dataloader, model):
 
 
 if __name__ == '__main__':
+    opt = parse_arguments()
+    
+    print(opt)
     ########## Change it with your data ##############
-    data_file = "./data/Xiaohan/sample/cropped2-2.tif"
-    model_file = "./src/GUI/trained_models/bs1.pth" # "./results/saved_models/mytest/model_0.pth"
-    output_file = "./results/xiaohan_denoised_0.tif"
+    data_file = opt.noisy_data[0]
+    model_file = opt.model # "./results/saved_models/mytest/model_0.pth"
+    output_file = "./results/denoised_0.tif"
     patch_size = [61, 64, 64]
     patch_interval = [1, 32, 32]
     batch_size = 16    # lower it if memory exceeds.
     bs_size = 1    # modify if you changed bs_size when training.
     ##################################################
 
-    model = SUPPORT(in_channels=61, mid_channels=[16, 32, 64, 128, 256], depth=5,\
-            blind_conv_channels=64, one_by_one_channels=[32, 16], last_layer_channels=[64, 32, 16], bs_size=bs_size).cuda()
+    model = SUPPORT(in_channels=opt.input_frames, mid_channels=opt.unet_channels, depth=opt.depth,\
+         blind_conv_channels=opt.blind_conv_channels, one_by_one_channels=opt.one_by_one_channels,\
+                last_layer_channels=opt.last_layer_channels, bs_size=opt.bs_size, bp=opt.bp).cuda()
+    # model = SUPPORT(in_channels=61, mid_channels=opt.unet_channels, depth=opt.depth,\
+    #         blind_conv_channels=64, one_by_one_channels=[32, 16], last_layer_channels=[64, 32, 16], bs_size=bs_size).cuda()
 
     model.load_state_dict(torch.load(model_file))
 

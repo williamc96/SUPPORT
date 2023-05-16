@@ -3,4 +3,8 @@
 *.pyo
 .vscode
 *.tmp
-
+*.tif
+SUPPORT_train
+results/logs/*
+results/saved_models/*
+results/tsboard/*
