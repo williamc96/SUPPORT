@@ -15,6 +15,8 @@ from src.utils.util import parse_arguments
 from model.SUPPORT import SUPPORT
 
 
+# python -m src.train --bs_size 4 4 --input_frames 8 --patch_size 8 128 128 --exp_name mytest --noisy_data "E:\ROI45-SUN1-No.2-800Hz-dense labeling-60 cells-20min\20230317-144408\FR00001_PV00001.raw" --n_epochs 11 --checkpoint_interval 1
+
 def train(train_dataloader, model, optimizer, rng, writer, epoch, opt):
     """
     Train a model for a single epoch
@@ -108,12 +110,6 @@ if __name__=="__main__":
         filemode="a", format="%(name)s - %(levelname)s - %(message)s")
     writer = SummaryWriter(opt.results_dir + "/tsboard/{}".format(opt.exp_name))
 
-    #-----------
-    # Dataset
-    # ----------
-    dataloader_train = gen_train_dataloader(opt.patch_size, opt.patch_interval, opt.batch_size, \
-        opt.noisy_data)
-
     # ----------
     # Model, Optimizers, and Loss
     # ----------
@@ -126,6 +122,9 @@ if __name__=="__main__":
     if cuda:
         model = model.cuda()
     
+    # print(opt.results_dir + "/saved_models/%s/model_%d.pth" % (opt.exp_name, opt.epoch-1))
+    # exit()
+
     if opt.epoch != 0:
         model.load_state_dict(torch.load(opt.results_dir + "/saved_models/%s/model_%d.pth" % (opt.exp_name, opt.epoch-1)))
         optimizer.load_state_dict(torch.load(opt.results_dir + "/saved_models/%s/optimizer_%d.pth" % (opt.exp_name, opt.epoch-1)))
@@ -135,6 +134,10 @@ if __name__=="__main__":
     # Training & Validation
     # ----------
     for epoch in range(opt.epoch, opt.n_epochs):
+        #reload random parts of the data every epoch (when too large to fit all in memory)
+        dataloader_train = gen_train_dataloader(opt.patch_size, opt.patch_interval, opt.batch_size, \
+            opt.noisy_data,totalFrames=opt.totalFramesPerEpoch,numConsecFrames=opt.nConsecFrames)
+
         loss_list, loss_list_l1, loss_list_l2 =\
             train(dataloader_train, model, optimizer, rng, writer, epoch, opt)
 

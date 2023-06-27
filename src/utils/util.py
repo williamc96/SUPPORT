@@ -21,6 +21,9 @@ def parse_arguments():
     parser.add_argument("--patch_size", type=int, default=[61, 128, 128], nargs="+", help="size of the patches")
     parser.add_argument("--patch_interval", type=int, default=[1, 64, 64], nargs="+", help="size of the patch interval")
     parser.add_argument("--batch_size", type=int, default=16, help="size of the batches")
+    parser.add_argument("--totalFramesPerEpoch", type=int, default=10000, help="total number of frames to train on in an epoch")
+    parser.add_argument("--nConsecFrames", type=int, default=-1, help="size of random chunks to train on")
+
 
     # model
     parser.add_argument("--model", type=str, default="./src/GUI/trained_models/bs1.pth", help= "The path to the model to use")
@@ -56,11 +59,12 @@ def parse_arguments():
         tmp_root = opt.noisy_data[0]
         tmp_files = os.listdir(tmp_root)
         opt.noisy_data = [os.path.join(tmp_root, i) for i in tmp_files]
-
+    if opt.nConsecFrames==-1:
+        opt.nConsecFrames = opt.input_frames*4;
     return opt
 
 
-def get_coordinate(img_size, patch_size, patch_interval):
+def get_coordinate(img_size, patch_size, patch_interval, i=-1):
     """DeepCAD version of stitching
     https://github.com/cabooster/DeepCAD/blob/53a9b8491170e298aa7740a4656b4f679ded6f41/DeepCAD_pytorch/data_process.py#L374
     """
@@ -181,3 +185,119 @@ def get_coordinate(img_size, patch_size, patch_interval):
                 coordinate_list.append(single_coordinate)
 
     return coordinate_list
+
+
+def get_coordinate_generator(img_size, patch_size, patch_interval):
+    """DeepCAD version of stitching
+    https://github.com/cabooster/DeepCAD/blob/53a9b8491170e298aa7740a4656b4f679ded6f41/DeepCAD_pytorch/data_process.py#L374
+    """
+    whole_s, whole_h, whole_w = img_size
+    img_s, img_h, img_w = patch_size
+    gap_s, gap_h, gap_w = patch_interval
+
+    cut_w = (img_w - gap_w)/2
+    cut_h = (img_h - gap_h)/2
+    cut_s = (img_s - gap_s)/2
+
+    num_w = math.ceil((whole_w-img_w+gap_w)/gap_w)
+    num_h = math.ceil((whole_h-img_h+gap_h)/gap_h)
+    num_s = math.ceil((whole_s-img_s+gap_s)/gap_s)
+
+    for z in range(0, num_s):
+        for x in range(0, num_h):
+            for y in range(0, num_w):
+                single_coordinate={'init_h':0, 'end_h':0, 'init_w':0, 'end_w':0, 'init_s':0, 'end_s':0}
+                if x != (num_h-1):
+                    init_h = gap_h*x
+                    end_h = gap_h*x + img_h
+                elif x == (num_h-1):
+                    init_h = whole_h - img_h
+                    end_h = whole_h
+
+                if y != (num_w-1):
+                    init_w = gap_w*y
+                    end_w = gap_w*y + img_w
+                elif y == (num_w-1):
+                    init_w = whole_w - img_w
+                    end_w = whole_w
+
+                if z != (num_s-1):
+                    init_s = gap_s*z
+                    end_s = gap_s*z + img_s
+                elif z == (num_s-1):
+                    init_s = whole_s - img_s
+                    end_s = whole_s
+                single_coordinate['init_h'] = init_h
+                single_coordinate['end_h'] = end_h
+                single_coordinate['init_w'] = init_w
+                single_coordinate['end_w'] = end_w
+                single_coordinate['init_s'] = init_s
+                single_coordinate['end_s'] = end_s
+
+                if y == 0:
+                    if num_w > 1:
+                        single_coordinate['stack_start_w'] = y*gap_w
+                        single_coordinate['stack_end_w'] = y*gap_w+img_w-cut_w
+                        single_coordinate['patch_start_w'] = 0
+                        single_coordinate['patch_end_w'] = img_w-cut_w
+                    else:
+                        single_coordinate['stack_start_w'] = 0
+                        single_coordinate['stack_end_w'] = img_w
+                        single_coordinate['patch_start_w'] = 0
+                        single_coordinate['patch_end_w'] = img_w
+                elif y == num_w-1:
+                    single_coordinate['stack_start_w'] = whole_w-img_w+cut_w
+                    single_coordinate['stack_end_w'] = whole_w
+                    single_coordinate['patch_start_w'] = cut_w
+                    single_coordinate['patch_end_w'] = img_w
+                else:
+                    single_coordinate['stack_start_w'] = y*gap_w+cut_w
+                    single_coordinate['stack_end_w'] = y*gap_w+img_w-cut_w
+                    single_coordinate['patch_start_w'] = cut_w
+                    single_coordinate['patch_end_w'] = img_w-cut_w
+
+                if x == 0:
+                    if num_h > 1:
+                        single_coordinate['stack_start_h'] = x*gap_h
+                        single_coordinate['stack_end_h'] = x*gap_h+img_h-cut_h
+                        single_coordinate['patch_start_h'] = 0
+                        single_coordinate['patch_end_h'] = img_h-cut_h
+                    else:
+                        single_coordinate['stack_start_h'] = 0
+                        single_coordinate['stack_end_h'] = x*gap_h+img_h
+                        single_coordinate['patch_start_h'] = 0
+                        single_coordinate['patch_end_h'] = img_h
+                elif x == num_h-1:
+                    single_coordinate['stack_start_h'] = whole_h-img_h+cut_h
+                    single_coordinate['stack_end_h'] = whole_h
+                    single_coordinate['patch_start_h'] = cut_h
+                    single_coordinate['patch_end_h'] = img_h
+                else:
+                    single_coordinate['stack_start_h'] = x*gap_h+cut_h
+                    single_coordinate['stack_end_h'] = x*gap_h+img_h-cut_h
+                    single_coordinate['patch_start_h'] = cut_h
+                    single_coordinate['patch_end_h'] = img_h-cut_h
+
+                if z == 0:
+                    if num_s > 1:
+                        single_coordinate['stack_start_s'] = z*gap_s
+                        single_coordinate['stack_end_s'] = z*gap_s+img_s-cut_s
+                        single_coordinate['patch_start_s'] = 0
+                        single_coordinate['patch_end_s'] = img_s-cut_s
+                    else:
+                        single_coordinate['stack_start_s'] = z*gap_s
+                        single_coordinate['stack_end_s'] = z*gap_s+img_s
+                        single_coordinate['patch_start_s'] = 0
+                        single_coordinate['patch_end_s'] = img_s
+                elif z == num_s-1:
+                    single_coordinate['stack_start_s'] = whole_s-img_s+cut_s
+                    single_coordinate['stack_end_s'] = whole_s
+                    single_coordinate['patch_start_s'] = cut_s
+                    single_coordinate['patch_end_s'] = img_s
+                else:
+                    single_coordinate['stack_start_s'] = z*gap_s+cut_s
+                    single_coordinate['stack_end_s'] = z*gap_s+img_s-cut_s
+                    single_coordinate['patch_start_s'] = cut_s
+                    single_coordinate['patch_end_s'] = img_s-cut_s
+
+                yield single_coordinate  # yield the single_coordinate

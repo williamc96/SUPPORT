@@ -3,8 +3,62 @@ import numpy as np
 import torch
 
 from torch.utils.data import Dataset, DataLoader
-from src.utils.util import get_coordinate
+from src.utils.util import get_coordinate,get_coordinate_generator
 
+import numpy as np
+import random
+from tqdm import tqdm
+import math
+
+class FrameReader:
+    def __init__(self, fileID, width=588, height=624, gap=1728, dtype=np.uint8, maxFrames=24000,shuffle=True):
+        self.fileID = fileID
+        self.width = width
+        self.height = height
+        self.gap = gap
+        self.dtype = dtype
+        self.maxFrames = maxFrames
+        self.frame_size = self.width * self.height
+        self.shuffle = shuffle
+        self.pointer = -1 if shuffle else 0
+
+    def isDone(self, numFrames, givePartial=True):
+        if self.pointer==self.maxFrames+1:
+            return True
+        if givePartial:
+            return False
+        return self.pointer+numFrames>self.maxFrames
+
+    def getFrames(self, numFrames=50, givePartial=True):
+        images = []
+        # Randomly select a start frame number
+        start_frame = random.randint(0, self.maxFrames - numFrames) if self.shuffle else self.pointer
+
+        # Calculate the offset to the start frame (in bytes)
+        offset = (self.frame_size + self.gap) * (start_frame)
+
+        if self.isDone(numFrames,givePartial):
+            return np.array([])
+
+        # Open the file in binary mode
+        with open(self.fileID, 'rb') as file:
+            # Skip to the start frame
+            file.seek(offset)
+
+            if not self.shuffle:
+                self.pointer+=numFrames
+            # Loop to read the specified number of frames
+            for _ in range(numFrames):
+                # Read the image data
+                image_data = np.fromfile(file, dtype=self.dtype, count=self.frame_size)
+
+                images.append(np.reshape(image_data, (self.height, self.width)))
+
+                # Move the file pointer to the next frame
+                file.seek(self.gap, 1)
+
+        # Return the list of Image objects
+        return np.array(images)
 
 def random_transform(input, target, rng, is_rotate=True):
     """
@@ -154,6 +208,8 @@ class DatasetSUPPORT(Dataset):
             [y_idx, y_idx + self.patch_size[1]], [z_idx, z_idx + self.patch_size[2]]]), torch.tensor(ds_idx)
 
 
+
+
 class DatasetSUPPORT_test_stitch(Dataset):
     def __init__(self, noisy_image, patch_size=[61, 128, 128], patch_interval=[10, 64, 64], load_to_memory=True,\
         transform=None, random_patch=False, random_patch_seed=0):
@@ -208,9 +264,11 @@ class DatasetSUPPORT_test_stitch(Dataset):
         init_s = single_coordinate['init_s']
         end_s = single_coordinate['end_s']
 
+
         # for stitching dataset range
         noisy_image = self.noisy_image[init_s:end_s,init_h:end_h,init_w:end_w]
-
+        # print(single_coordinate)
+        # print(noisy_image.shape)
         # transform
         if self.transform:
             rand_i = self.patch_rng.integers(0, self.transform.n_masks)
@@ -219,8 +277,84 @@ class DatasetSUPPORT_test_stitch(Dataset):
 
         return noisy_image, torch.empty(1), single_coordinate
 
+class DatasetSUPPORT_incremental_load(Dataset):
+    def __init__(self, reader, patch_size=[61, 128, 128], patch_interval=[10, 64, 64],\
+        transform=None, batch_size = -1):
+        if (batch_size==-1):
+            batch_size = patch_size[0]*4
+        if len(patch_size) != 3:
+            raise Exception("length of patch_size must be 3")
+        if len(patch_interval) != 3:
+            raise Exception("length of patch_interval must be 3")
+        self.patch_size = patch_size
+        self.patch_interval = patch_interval
+        self.transform = transform
+        self.reader = reader
+        self.batch_size = batch_size
+        self.noisy_image = torch.from_numpy(self.reader.getFrames(batch_size)).type(torch.FloatTensor)
+        print("init: " + str(self.noisy_image.shape))
+        self.indices = []
+        tmp_size = self.noisy_image.size()
+        if np.any(tmp_size < np.array(self.patch_size)):
+            raise Exception("patch size is larger than data size")
+        tmp_size = list(tmp_size)  # convert the torch.Size to a list
+        tmp_size[0] = reader.maxFrames  # update the element
+        tmp_size = torch.Size(tmp_size)  # convert the list back to torch.Size
+        self.output_size = tmp_size
+        self.coordinate_gen = get_coordinate_generator(tmp_size, patch_size, patch_interval)
 
-def gen_train_dataloader(patch_size, patch_interval, batch_size, noisy_data_list):
+
+        whole_s, whole_h, whole_w = reader.maxFrames, reader.width, reader.height
+        img_s, img_h, img_w = patch_size
+        gap_s, gap_h, gap_w = patch_interval
+        num_w = math.ceil((whole_w-img_w+gap_w)/gap_w)
+        num_h = math.ceil((whole_h-img_h+gap_h)/gap_h)
+        num_s = math.ceil((whole_s-img_s+gap_s)/gap_s)
+        self.length = num_w*num_h*num_s
+
+    def __len__(self):
+        return self.length
+
+    def numExtra(self):
+        return math.ceil((self.patch_size[0]-1)/2)
+
+    def __getitem__(self, i):
+
+        single_coordinate = next(self.coordinate_gen)
+        init_h = single_coordinate['init_h']
+        end_h = single_coordinate['end_h']
+        init_w = single_coordinate['init_w']
+        end_w = single_coordinate['end_w']
+        init_s = single_coordinate['init_s']
+        end_s = single_coordinate['end_s']
+
+        if end_s>self.reader.pointer:
+            self.update_frames()
+        # print("frames shape: " + str(self.noisy_image.shape))
+
+        # print("before init: " + str(init_s) + " end: " + str(end_s))
+        init_s = init_s-self.reader.pointer + len(self.noisy_image)
+        end_s = end_s-self.reader.pointer + len(self.noisy_image)
+        # print("after init: " + str(init_s) + " end: " + str(end_s) + " self.reader.pointer: " + str(self.reader.pointer) + " len(self.noisy_image): " + str(len(self.noisy_image)))
+
+        noisy_image = self.noisy_image[init_s:end_s,init_h:end_h,init_w:end_w]
+        # print(noisy_image.shape)
+        # print(single_coordinate)
+        if self.transform:
+            rand_i = self.patch_rng.integers(0, self.transform.n_masks)
+            rand_t = self.patch_rng.integers(0, 2)
+            noisy_image = self.transform.mask(noisy_image, rand_i, rand_t)
+        return noisy_image, torch.empty(1), single_coordinate
+
+    def update_frames(self):
+        newFrames = torch.from_numpy(self.reader.getFrames(self.batch_size)).type(torch.FloatTensor)
+        # print("NEW FRAMES: " + str(newFrames.shape))
+        # Keep the last `self.numExtra()` frames of the old images
+        self.noisy_image = torch.cat((self.noisy_image[-self.numExtra()*2:], newFrames), dim=0)
+
+
+
+def gen_train_dataloader(patch_size, patch_interval, batch_size, noisy_data_list, totalFrames=10000,numConsecFrames=200):
     """
     Generate dataloader for training
 
@@ -234,13 +368,62 @@ def gen_train_dataloader(patch_size, patch_interval, batch_size, noisy_data_list
     """
     noisy_images_train = []
 
-    for noisy_data in noisy_data_list:
-        noisy_image = torch.from_numpy(skio.imread(noisy_data).astype(np.float32)).type(torch.FloatTensor)
-        T, _, _ = noisy_image.shape
-        noisy_images_train.append(noisy_image)
+    numFiles = len(noisy_data_list)
+    print("=============== loading data ===============")
+    for i,noisy_data in enumerate(noisy_data_list):
+        print("file " + str(i+1) + " of " + str(numFiles))
+        if noisy_data.endswith('.raw'):
+            frameReader = FrameReader(noisy_data)
+            for _ in tqdm(range(int(totalFrames/numFiles/numConsecFrames)), desc="Loading file {}".format(i+1), ncols=70):
+                frames = frameReader.getFrames(numConsecFrames)
+                noisy_image = torch.from_numpy(frames.astype(np.float32)).type(torch.FloatTensor)
+                T, _, _ = noisy_image.shape
+                noisy_images_train.append(noisy_image)
+        else:
+            noisy_image = torch.from_numpy(skio.imread(noisy_data).astype(np.float32)).type(torch.FloatTensor)
+            T, _, _ = noisy_image.shape
+            noisy_images_train.append(noisy_image)
+
 
     dataset_train = DatasetSUPPORT(noisy_images_train, patch_size=patch_size,\
         patch_interval=patch_interval, transform=None, random_patch=True)
     dataloader_train = DataLoader(dataset_train, batch_size=batch_size, shuffle=True)
+    print("=============== done loading ===============")
+    return dataloader_train
+
+def gen_test_dataloader(patch_size, patch_interval, batch_size, noisy_data_list, totalFrames=10000,numConsecFrames=200):
+    """
+    Generate dataloader for training
+
+    Arguments:
+        patch_size: opt.patch_size
+        patch_interval: opt.patch_interval
+        noisy_data_list: opt.noisy_data
     
+    Returns:
+        dataloader_train
+    """
+    noisy_images_train = []
+
+    numFiles = len(noisy_data_list)
+    print("=============== loading data ===============")
+    for i,noisy_data in enumerate(noisy_data_list):
+        print("file " + str(i+1) + " of " + str(numFiles))
+        if noisy_data.endswith('.raw'):
+            frameReader = FrameReader(noisy_data)
+            for _ in tqdm(range(int(totalFrames/numFiles/numConsecFrames)), desc="Loading file {}".format(i+1), ncols=70):
+                frames = frameReader.getFrames(numConsecFrames)
+                noisy_image = torch.from_numpy(frames.astype(np.float32)).type(torch.FloatTensor)
+                T, _, _ = noisy_image.shape
+                noisy_images_train.append(noisy_image)
+        else:
+            noisy_image = torch.from_numpy(skio.imread(noisy_data).astype(np.float32)).type(torch.FloatTensor)
+            T, _, _ = noisy_image.shape
+            noisy_images_train.append(noisy_image)
+
+
+    dataset_train = DatasetSUPPORT(noisy_images_train, patch_size=patch_size,\
+        patch_interval=patch_interval, transform=None, random_patch=True)
+    dataloader_train = DataLoader(dataset_train, batch_size=batch_size, shuffle=True)
+    print("=============== done loading ===============")
     return dataloader_train
