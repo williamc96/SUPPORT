@@ -17,7 +17,7 @@ from model.SUPPORT import SUPPORT
 
 # python -m src.train --bs_size 4 4 --input_frames 8 --patch_size 8 128 128 --exp_name mytest --noisy_data "E:\ROI45-SUN1-No.2-800Hz-dense labeling-60 cells-20min\20230317-144408\FR00001_PV00001.raw" --n_epochs 11 --checkpoint_interval 1
 
-def train(train_dataloader, model, optimizer, rng, writer, epoch, opt):
+def train(train_dataloader, model, optimizer, scaler, rng, writer, epoch, opt):
     """
     Train a model for a single epoch
 
@@ -47,26 +47,38 @@ def train(train_dataloader, model, optimizer, rng, writer, epoch, opt):
 
     L1_pixelwise = torch.nn.L1Loss()
     L2_pixelwise = torch.nn.MSELoss()
-
     loss_coef = opt.loss_coef
 
     # training
     for i, data in enumerate(tqdm(train_dataloader)):
+        if opt.is_zarr:
+            (noisy_image, _, ds_idx, noisy_image_avg, noisy_image_std) = data
+            noisy_image_avg = torch.reshape(noisy_image_avg, (-1, 1, 1, 1))
+            noisy_image_std = torch.reshape(noisy_image_std, (-1, 1, 1, 1))
+        else:
+            (noisy_image, _, ds_idx) = data
 
-        (noisy_image, _, ds_idx) = data
-        noisy_image, _ = random_transform(noisy_image, None, rng, is_rotate)
-        
         B, T, X, Y = noisy_image.shape
         noisy_image = noisy_image.cuda()
+        noisy_image, _ = random_transform(noisy_image, None, rng, is_rotate)
+        if opt.is_zarr:
+            noisy_image_avg = noisy_image_avg.cuda()
+            noisy_image_std = noisy_image_std.cuda()
+            noisy_image = (noisy_image - noisy_image_avg) / noisy_image_std
         noisy_image_target = torch.unsqueeze(noisy_image[:, int(T/2), :, :], dim=1)
 
         optimizer.zero_grad()
-        noisy_image_denoised = model(noisy_image)
-        loss_l1_pixelwise = L1_pixelwise(noisy_image_denoised, noisy_image_target)
-        loss_l2_pixelwise = L2_pixelwise(noisy_image_denoised, noisy_image_target)
-        loss_sum = loss_coef[0] * loss_l1_pixelwise + loss_coef[1] * loss_l2_pixelwise
-        loss_sum.backward()
-        optimizer.step()
+        # Forward pass wrapped in autocast for AMP
+        with torch.cuda.amp.autocast(enabled=opt.use_amp):
+            noisy_image_denoised = model(noisy_image)
+            loss_l1_pixelwise = L1_pixelwise(noisy_image_denoised, noisy_image_target)
+            loss_l2_pixelwise = L2_pixelwise(noisy_image_denoised, noisy_image_target)
+            loss_sum = loss_coef[0] * loss_l1_pixelwise + loss_coef[1] * loss_l2_pixelwise
+            
+        # Backward pass with GradScaler if AMP is enabled
+        scaler.scale(loss_sum).backward()
+        scaler.step(optimizer)
+        scaler.update()
 
         loss_list_l1.append(loss_l1_pixelwise.item())
         loss_list_l2.append(loss_l2_pixelwise.item())
@@ -85,6 +97,13 @@ def train(train_dataloader, model, optimizer, rng, writer, epoch, opt):
             
             logging.info(f"[{ts}] Epoch [{epoch}/{opt.n_epochs}] Batch [{i+1}/{len(train_dataloader)}] "+\
                 f"loss : {loss_mean:.4f}, loss_l1 : {loss_mean_l1:.4f}, loss_l2 : {loss_mean_l2:.4f}")
+            
+        # save model, optimizer, and scaler
+        if (opt.checkpoint_interval != -1) and (i % opt.checkpoint_interval_batch == 0):
+            torch.save(model.state_dict(), opt.results_dir + "/saved_models/%s/model_%d_batch_%d.pth" % (opt.exp_name, epoch, i))
+            torch.save(optimizer.state_dict(), opt.results_dir + "/saved_models/%s/optimizer_%d_batch_%d.pth" % (opt.exp_name, epoch, i))
+            if opt.use_amp:
+                torch.save(scaler.state_dict(), opt.results_dir + "/saved_models/%s/scaler_%d_batch_%d.pth" % (opt.exp_name, epoch, i))
 
     return loss_list, loss_list_l1, loss_list_l2
 
@@ -119,6 +138,9 @@ if __name__=="__main__":
 
     optimizer = torch.optim.Adam(model.parameters(), lr=opt.lr)
 
+    # Initialize GradScaler if AMP is enabled
+    scaler = torch.cuda.amp.GradScaler(enabled=opt.use_amp)
+
     if cuda:
         model = model.cuda()
     
@@ -128,6 +150,8 @@ if __name__=="__main__":
     if opt.epoch != 0:
         model.load_state_dict(torch.load(opt.results_dir + "/saved_models/%s/model_%d.pth" % (opt.exp_name, opt.epoch-1)))
         optimizer.load_state_dict(torch.load(opt.results_dir + "/saved_models/%s/optimizer_%d.pth" % (opt.exp_name, opt.epoch-1)))
+        if opt.use_amp:
+            scaler.load_state_dict(torch.load(opt.results_dir + "/saved_models/%s/scaler_%d.pth" % (opt.exp_name, opt.epoch-1)))
         print('Loaded pre-trained model and optimizer weights of epoch {}'.format(opt.epoch-1))
 
     # ----------
@@ -139,7 +163,7 @@ if __name__=="__main__":
             opt.noisy_data,totalFrames=opt.totalFramesPerEpoch,numConsecFrames=opt.nConsecFrames)
 
         loss_list, loss_list_l1, loss_list_l2 =\
-            train(dataloader_train, model, optimizer, rng, writer, epoch, opt)
+            train(dataloader_train, model, optimizer, scaler, rng, writer, epoch, opt)
 
         # logging
         ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
@@ -158,6 +182,8 @@ if __name__=="__main__":
         if (opt.checkpoint_interval != -1) and (epoch % opt.checkpoint_interval == 0):
             torch.save(model.state_dict(), opt.results_dir + "/saved_models/%s/model_%d.pth" % (opt.exp_name, epoch))
             torch.save(optimizer.state_dict(), opt.results_dir + "/saved_models/%s/optimizer_%d.pth" % (opt.exp_name, epoch))
+            if opt.use_amp:
+                torch.save(scaler.state_dict(), opt.results_dir + "/saved_models/%s/scaler_%d.pth" % (opt.exp_name, epoch))
 
         # if (epoch % opt.sample_interval == 0):
         #     skio.imsave(opt.results_dir + "/images/%s/denoised_%d.pth" % (opt.exp_name, epoch), )

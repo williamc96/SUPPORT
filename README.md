@@ -4,6 +4,8 @@
 #### Not just voltage imaging data, SUPPORT can be used in any functional, volumetric, and timelapse data!
 #### No additional data required, only noisy data itself is just used!
 
+---
+
 <p align="center">
 <img src="https://github.com/NICALab/SUPPORT/blob/main/logo-1.png" width="120" alt="SUPPORT Logo">
 </p>
@@ -29,6 +31,7 @@
 </p>
 
 ## News
+- [11/16/2023] Presented **SUPPORT** at **_SfN Neuroscience 2023_**. Thanks for your intersest, and glad to hear that you are using SUPPORT well!
 - [09/18/2023] Now **SUPPORT** has been published in **_Nature Methods_**! :smile:
 
 
@@ -195,6 +198,18 @@ python -m src.train --exp_name mytest --noisy_data ./data/sample_data.tif
 --> python -m src.train --exp_name mytest --noisy_data ./data/sample_dataset --is_folder
 ```
 
+**Q:** SUPPORT does not denoise my data effectively. Could you offer any suggestions or help?
+
+**A:** To provide you with the best suggestions tailored to your data, we would appreciate it if you coud provide the following information in your email (It will make us faster to understand the situation and think solutions).
+
+```
+Imaging modality
+Name of (calcium/voltage) indicator
+Frame rate
+GPU&Training time (if you already trained on your own.)
+
+Demo data so that we can take a look (if Possible)
+```
 
 **- About GUI**
 
