@@ -13,6 +13,7 @@ from tqdm import tqdm
 from src.utils.dataset import gen_train_dataloader, random_transform
 from src.utils.util import parse_arguments
 from model.SUPPORT import SUPPORT
+from src.utils.dataset import FrameReader, DatasetSUPPORT_incremental_load
 
 
 # python -m src.train --bs_size 4 4 --input_frames 8 --patch_size 8 128 128 --exp_name mytest --noisy_data "E:\ROI45-SUN1-No.2-800Hz-dense labeling-60 cells-20min\20230317-144408\FR00001_PV00001.raw" --n_epochs 11 --checkpoint_interval 1
@@ -136,6 +137,7 @@ if __name__=="__main__":
          blind_conv_channels=opt.blind_conv_channels, one_by_one_channels=opt.one_by_one_channels,\
                 last_layer_channels=opt.last_layer_channels, bs_size=opt.bs_size, bp=opt.bp)
 
+
     optimizer = torch.optim.Adam(model.parameters(), lr=opt.lr)
 
     # Initialize GradScaler if AMP is enabled
@@ -154,6 +156,10 @@ if __name__=="__main__":
             scaler.load_state_dict(torch.load(opt.results_dir + "/saved_models/%s/scaler_%d.pth" % (opt.exp_name, opt.epoch-1)))
         print('Loaded pre-trained model and optimizer weights of epoch {}'.format(opt.epoch-1))
 
+    print("need to set reader params if raw")
+    reader = FrameReader(opt.noisy_data[0], width=588, height=624, gap=1728, maxFrames=24000, shuffle=True)
+    train_dataset = DatasetSUPPORT_incremental_load(reader, patch_size=opt.patch_size, patch_interval=opt.patch_interval)
+    dataloader_train = torch.utils.data.DataLoader(train_dataset, batch_size=opt.batch_size, shuffle=True)
     # ----------
     # Training & Validation
     # ----------

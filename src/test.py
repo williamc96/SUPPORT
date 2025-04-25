@@ -134,7 +134,7 @@ def validate(test_dataloader, model, output_file):
 #     print(denoised_stack.shape)
 #     skio.imsave(output_file, denoised_stack[(model.in_channels-1)//2:-(model.in_channels-1)//2, : , :], metadata={'axes': 'TYX'})
 
-
+# python -m src.test --model "C:\Users\WillRemote\Desktop\SUPPORT\SUPPORT\results\saved_models\mytest\model_1_batch_40000.pth" --bs_size 4 4 --input_frames 8 --patch_size 8 128 128 --exp_name mytest --noisy_data "E:\Synmap Local\4-15-25\Slice 3\FOV 1\acq 3\Analysis\RegBGMov()_1-1.tif"
 if __name__ == '__main__':
     opt = parse_arguments()
     
@@ -149,10 +149,14 @@ if __name__ == '__main__':
     bs_size = 3    # modify if you changed bs_size when training.
     bp_mode = False
     ##################################################
+    print(opt.one_by_one_channels)
+    
 
-    model = SUPPORT(in_channels=61, mid_channels=[16, 32, 64, 128, 256], depth=5,\
-            blind_conv_channels=64, one_by_one_channels=[32, 16], last_layer_channels=[64, 32, 16], bs_size=bs_size, bp=bp_mode).cuda()
+    model = SUPPORT(in_channels=opt.input_frames, mid_channels=opt.unet_channels, depth=opt.depth,\
+            blind_conv_channels=opt.blind_conv_channels, one_by_one_channels=opt.one_by_one_channels, last_layer_channels=opt.last_layer_channels, bs_size=bs_size, bp=bp_mode).cuda()
 
+    print(model_file)
+    # exit()
     model.load_state_dict(torch.load(model_file))
 
     reader = FrameReader(data_file)
